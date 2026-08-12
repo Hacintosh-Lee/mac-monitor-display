@@ -1,6 +1,8 @@
 # Mac 监控屏 · ESP32-C3 + 2.4" ST7789
 
 > 由 B 站 UP 主 **[日常熊 DailyBear](https://space.bilibili.com/20653637)** 制作
+>
+> 📺 **[点此观看视频演示](https://www.bilibili.com/video/BV12guC6oEnh/)**
 
 把 Mac 的实时状态显示在一块 2.4 寸彩屏上。Mac 侧跑一个后台采集进程，通过 USB 串口把数据推给 ESP32-C3，由它渲染仪表盘。
 
@@ -298,7 +300,10 @@ C3 的 USB-Serial-JTAG 用 DTR/RTS 控制复位，设 `dtr=False; rts=False` 也
 
 ## 作者
 
-**日常熊 DailyBear** — B 站主页：<https://space.bilibili.com/20653637>
+**日常熊 DailyBear**
+
+- B 站主页：<https://space.bilibili.com/20653637>
+- 视频演示：<https://www.bilibili.com/video/BV12guC6oEnh/>
 
 如果这个项目对你有用，欢迎去 B 站关注一下。
 
