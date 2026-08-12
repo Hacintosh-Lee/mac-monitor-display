@@ -1,6 +1,6 @@
 # Mac 监控屏 · ESP32-C3 + 2.4" ST7789
 
-> 由 B 站 UP 主 **[日常熊 DailyBear](https://space.bilibili.com/20653637)** 制作
+> 由 Bilibili UP 主 **[日常熊 DailyBear](https://space.bilibili.com/20653637)** 制作
 >
 > 📺 **[点此观看视频演示](https://www.bilibili.com/video/BV12guC6oEnh/)**
 
