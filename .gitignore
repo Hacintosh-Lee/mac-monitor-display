@@ -1,0 +1,8 @@
+# 构建产物
+.pio/
+.venv/
+
+# Claude Code 本地配置 —— 含本机用户名和绝对路径, 不可对外发布
+.claude/
+
+.DS_Store
