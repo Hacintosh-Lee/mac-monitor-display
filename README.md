@@ -3,6 +3,8 @@
 > 由 Bilibili UP 主 **[日常熊 DailyBear](https://space.bilibili.com/20653637)** 制作
 >
 > 📺 **[点此观看视频演示](https://www.bilibili.com/video/BV12guC6oEnh/)**
+>
+> 如果觉得README写的太复杂看不明白，直接把固件包丢给你的agent，它会帮你解决的😊你只需要准备好屏幕和连接好的ESP32就好了
 
 把 Mac 的实时状态显示在一块 2.4 寸彩屏上。Mac 侧跑一个后台采集进程，通过 USB 串口把数据推给 ESP32-C3，由它渲染仪表盘。
 
