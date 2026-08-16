@@ -256,11 +256,92 @@ def light_portrait():
     im.save(os.path.join(OUT, "ui-light-portrait.png"))
 
 
+# ============================================================
+# 待机时钟。路径定义和 include/clockface.h 里的 CDIG 一一对应,
+# 改了字形两边都要动 —— 但至少 README 的图不会和固件长得不一样。
+CDIG = {
+    0: [("a", .50, .50, .32, .42, 0, 360)],
+    1: [("l", .54, .07, .54, .93), ("l", .54, .09, .25, .28)],
+    2: [("a", .50, .30, .30, .22, 180, 375), ("l", .79, .36, .14, .90),
+        ("l", .14, .90, .88, .90)],
+    3: [("a", .48, .30, .28, .22, 180, 450), ("a", .48, .74, .32, .22, 270, 540)],
+    4: [("l", .68, .08, .09, .63), ("l", .09, .63, .92, .63), ("l", .68, .08, .68, .92)],
+    5: [("l", .82, .09, .22, .09), ("l", .22, .09, .20, .50),
+        ("a", .48, .66, .30, .27, 215, 505)],
+    6: [("a", .52, .31, .27, .23, 180, 345), ("l", .25, .31, .19, .68),
+        ("a", .50, .70, .31, .23, 0, 360)],
+    7: [("l", .11, .09, .89, .09), ("l", .89, .09, .36, .93)],
+    8: [("a", .50, .30, .27, .22, 0, 360), ("a", .50, .72, .31, .22, 0, 360)],
+    9: [("a", .48, .30, .29, .23, 0, 360), ("l", .77, .30, .79, .66),
+        ("a", .48, .66, .31, .24, 0, 125)],
+}
+
+
+def _grad(c0, c1, y, y0, y1):
+    t = 0 if y1 <= y0 else max(0.0, min(1.0, (y - y0) / (y1 - y0)))
+    return tuple(int(int(c0[1:][j:j+2], 16) * (1 - t) + int(c1[1:][j:j+2], 16) * t)
+                 for j in (0, 2, 4))
+
+
+def _stamp(d, px, py, r, col):
+    d.ellipse([S(px - r), S(py - r), S(px + r), S(py + r)], fill=col)
+
+
+def _digit(d, n, x, y, w, h, th, c0, c1, gy0, gy1):
+    import math
+    r = th / 2
+    for seg in CDIG[n]:
+        if seg[0] == "l":
+            _, x1, y1, x2, y2 = seg
+            X1, Y1, X2, Y2 = x + x1 * w, y + y1 * h, x + x2 * w, y + y2 * h
+            steps = int(math.hypot(X2 - X1, Y2 - Y1) / 0.7) + 1
+            for i in range(steps + 1):
+                t = i / steps
+                px, py = X1 + (X2 - X1) * t, Y1 + (Y2 - Y1) * t
+                _stamp(d, px, py, r, _grad(c0, c1, py, gy0, gy1))
+        else:
+            _, cx, cy, rx, ry, a0, a1 = seg
+            CX, CY, RX, RY = x + cx * w, y + cy * h, rx * w, ry * h
+            steps = int(abs(a1 - a0) * math.pi / 180 * (RX + RY) / 2 / 0.7) + 1
+            for i in range(steps + 1):
+                a = math.radians(a0 + (a1 - a0) * i / steps)
+                px, py = CX + math.cos(a) * RX, CY + math.sin(a) * RY
+                _stamp(d, px, py, r, _grad(c0, c1, py, gy0, gy1))
+
+
+def clock_portrait():
+    BG, C0, C1 = "#0A0D14", "#00E5FF", "#B388FF"
+    W, H = 240, 320
+    im = Image.new("RGB", (S(W), S(H)), BG)
+    d = ImageDraw.Draw(im)
+
+    dateH = 40
+    avail = H - dateH
+    dh = avail * 0.38; dw = dh * 0.62; th = dh * 0.155
+    gapY = avail * 0.05; gapX = dw * 0.18
+    x0 = (W - (dw * 2 + gapX)) / 2
+    y1 = (avail - (dh * 2 + gapY)) / 2
+    y2 = y1 + dh + gapY
+    gy0, gy1 = y1, y2 + dh
+
+    hh, mm = 9, 41
+    _digit(d, hh // 10, x0, y1, dw, dh, th, C0, C1, gy0, gy1)
+    _digit(d, hh % 10, x0 + dw + gapX, y1, dw, dh, th, C0, C1, gy0, gy1)
+    _digit(d, mm // 10, x0, y2, dw, dh, th, C0, C1, gy0, gy1)
+    _digit(d, mm % 10, x0 + dw + gapX, y2, dw, dh, th, C0, C1, gy0, gy1)
+
+    txt(d, (W / 2, H - 20), "SUN 16", f(12), "#FFFFFF", "mm")
+    im.save(os.path.join(OUT, "ui-clock-portrait.png"))
+    print("  ui-clock-portrait.png")
+
+
 if __name__ == "__main__":
     dark_portrait()
     dark_landscape()
     light_portrait()
+    clock_portrait()
     print("已生成:")
-    for n in ("ui-dark-portrait.png", "ui-dark-landscape.png", "ui-light-portrait.png"):
-        p = os.path.join(OUT, n)
-        print(f"  {n}  {os.path.getsize(p) // 1024} KB")
+    for n in ("ui-dark-portrait.png", "ui-dark-landscape.png",
+              "ui-light-portrait.png", "ui-clock-portrait.png"):
+        fp = os.path.join(OUT, n)
+        print(f"  {n}  {os.path.getsize(fp) // 1024} KB")
