@@ -2,6 +2,7 @@
 // 抽出来是为了保证协议只有一处定义 —— 复制两份迟早会改跑偏。
 #pragma once
 #include <Arduino.h>
+#include "timekeeper.h"
 
 // 能显示的最大核心数。以前是 32, 但 Mac Pro / 大核数机型的逻辑 CPU 会超过这个数,
 // 超了之后 ncore 被硬钳到 32, 屏幕上就画出 32 根柱子 —— 核数显示是错的。
@@ -60,6 +61,16 @@ static void parseLine(char *line) {
   if (strncmp(line, "$I,", 3) == 0) {
     strncpy(g_label, line + 3, sizeof(g_label) - 1);
     g_label[sizeof(g_label) - 1] = 0;
+    lastRx = millis();
+    return;
+  }
+  // $T,<unix秒>,<时区偏移秒> —— 完整时间, 供时钟模式在主机断开后继续走
+  if (strncmp(line, "$T,", 3) == 0) {
+    char *save = nullptr;
+    strtok_r(line, ",", &save);
+    char *a = strtok_r(nullptr, ",", &save);
+    char *b = strtok_r(nullptr, ",", &save);
+    if (a && b) tkSetFromHost((time_t)atoll(a), atol(b));
     lastRx = millis();
     return;
   }

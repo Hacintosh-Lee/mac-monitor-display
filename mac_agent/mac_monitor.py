@@ -7,11 +7,17 @@ Mac -> ESP32 监控数据推送
 
 协议 (每行一条, \n 结尾):
   $I,<机型标签>                      设备信息, 连上时发一次, 之后每 10s 补发
+  $T,<unix秒>,<本地时区偏移秒>       完整时间, 和 $I 同频补发
   $M,cpu,gpu,memPct,memUsedMB,memTotalMB,swapPct,diskPct,diskUsedGB,
      diskTotalGB,rxKBs,txKBs,load1,uptimeMin,HH:MM,topName,topCpu,
      cpuTempC,gpuTempC,ncore,c0..cN
 
-$I 要周期性补发: ESP32 可能在任何时刻重启, 重启后它只有等到下一条 $I 才知道自己接的是哪台机器。
+$I / $T 要周期性补发: ESP32 可能在任何时刻重启, 重启后它只有等到下一条才知道
+自己接的是哪台机器、现在几点。
+
+$M 里那个 HH:MM 只够显示时钟, 没有日期也没有星期。时钟模式要显示 "SAT 15" 这类
+信息, 所以单独用 $T 下发完整的 unix 时间戳 + 时区偏移, 由固件自己算日期和星期 ——
+这样固件断开主机后也能靠本地 RTC 继续推算, 不用等下一帧。
 """
 
 import os
@@ -210,6 +216,12 @@ def main():
     log(f"本机: {label}")
     info_line = f"$I,{label}\n".encode("ascii", "replace")
 
+    def time_line():
+        now = time.time()
+        # 用当前时刻的实际偏移, 自动跟随夏令时
+        off = -(time.altzone if time.daylight and time.localtime().tm_isdst else time.timezone)
+        return f"$T,{int(now)},{off}\n".encode("ascii", "replace")
+
     ser = None
     next_info = 0.0
     waiting_logged = False
@@ -229,13 +241,14 @@ def main():
                 waiting_logged = False
                 ser = serial.Serial(port, BAUD, timeout=1, write_timeout=WRITE_TIMEOUT)
                 time.sleep(0.3)
-                next_info = 0.0        # 新连接立刻补一条 $I
+                next_info = 0.0        # 新连接立刻补 $I / $T
                 wtimeouts = 0
                 log(f"已连接 {port}")
 
             # ESP32 随时可能重启, 定期补发设备信息, 否则它重启后就不知道机型了
             if time.monotonic() >= next_info:
                 ser.write(info_line)
+                ser.write(time_line())
                 next_info = time.monotonic() + INFO_EVERY
 
             ser.write(sampler.sample().encode("ascii", "replace"))

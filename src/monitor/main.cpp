@@ -5,6 +5,13 @@
 #include <Arduino.h>
 #include "display.h"
 #include "stats.h"
+#include "clockface.h"
+
+// 屏幕装反了就把这个覆盖掉, 由 platformio.ini 的 -DSCREEN_ROTATION 传入,
+// 不用为了换个方向复制一份源码。
+#ifndef SCREEN_ROTATION
+#define SCREEN_ROTATION 0  // 0=竖版正向, 2=上下颠倒(屏幕倒装时用)
+#endif
 
 // ---------- 版式 (纵向排布, 互不重叠) ----------
 #define Y_GAUGE 32
@@ -358,7 +365,7 @@ static void drawWaiting() {
 void setup() {
   Serial.begin(115200);
   lcd.init();
-  lcd.setRotation(0);
+  lcd.setRotation(SCREEN_ROTATION);
   lcd.setBrightness(200);
   lcd.fillScreen(C(C_BG));
 
@@ -370,36 +377,58 @@ void setup() {
   sFoot.setColorDepth(16);  sFoot.createSprite(240, H_FOOT);
   Serial.printf("sprites allocated, free heap=%u\n", (unsigned)ESP.getFreeHeap());
 
+  tkBegin("MacMonitor-Setup");
   drawWaiting();
 }
 
+// 主机断开多久后切时钟。给足重连的余量, 免得偶尔丢一帧就闪一下时钟
+#define CLOCK_AFTER_MS 8000
+
 void loop() {
   pollSerial();
+  tkLoop();
+
+  bool hostLive = haveData && (millis() - lastRx < CLOCK_AFTER_MS);
+
+  // ---- 时钟模式 ----
+  static bool inClock = false;
+  static int lastMin = -1;
+  if (!hostLive && tkHasTime()) {
+    if (!inClock) { inClock = true; lastMin = -1; }
+    struct tm t = tkLocalTime();
+    if (t.tm_min != lastMin) {          // 一分钟才重画一次, 没必要空转
+      lastMin = t.tm_min;
+      drawClockFace(lcd, t, C_BG, C_CPU, C_GPU, C_DIM, tkHasTime());
+    }
+    delay(120);
+    return;
+  }
 
   static bool wasWaiting = true;
   if (!haveData) {
     delay(20);
     return;
   }
-  if (wasWaiting) {
-    lcd.fillScreen(C(C_BG));
+
+  // 从时钟切回仪表盘要整屏清一次, 否则大数字的残迹会留在底下
+  static uint32_t lastSlow = 0;
+  if (inClock || wasWaiting) {
+    inClock = false;
     wasWaiting = false;
+    lcd.fillScreen(C(C_BG));
+    lastSlow = 0;                       // 强制立刻全量重绘
   }
 
   animate();
 
-  static uint32_t lastSlow = 0;
   drawGauges();
   drawCores();
-  if (millis() - lastSlow > 400) {
+  if (lastSlow == 0 || millis() - lastSlow > 400) {
     lastSlow = millis();
     drawHeader();
     drawUsage();
     drawNet();
     drawFooter();
   }
-
-  // host 断开提示已经并进 drawHeader 的精灵里, 这里不再单独往屏上写
-
   delay(25);
 }

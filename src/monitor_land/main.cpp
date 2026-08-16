@@ -10,6 +10,12 @@
 #include "display.h"
 #include "stats.h"
 
+// 屏幕装反了就把这个覆盖掉, 由 platformio.ini 的 -DSCREEN_ROTATION 传入,
+// 不用为了换个方向复制一份源码。
+#ifndef SCREEN_ROTATION
+#define SCREEN_ROTATION 1  // 1=横版正向, 3=上下颠倒(屏幕倒装时用)
+#endif
+
 // ---------- 版式 (320x240, 各区严格不重叠) ----------
 #define W_SCR   320
 #define H_SCR   240
@@ -366,7 +372,7 @@ static void drawWaiting() {
 void setup() {
   Serial.begin(115200);
   lcd.init();
-  lcd.setRotation(1);          // 横版: 面板本身是 240x320, 转 90 度成 320x240
+  lcd.setRotation(SCREEN_ROTATION);
   lcd.setBrightness(200);
   lcd.fillScreen(C(C_BG));
 

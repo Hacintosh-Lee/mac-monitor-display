@@ -3,16 +3,18 @@
 #   ./flash.sh monitor    深色科技风 竖版 240x320
 #   ./flash.sh land       深色科技风 横版 320x240
 #   ./flash.sh light      浅色 Apple 风 竖版
+#   加 180 后缀即上下颠倒, 屏幕倒装时用 (monitor180 / land180 / light180)
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 ENV="${1:-}"
 case "$ENV" in
-  light|monitor|land) ;;
-  *) echo "用法: $0 {monitor|land|light}"
+  light|monitor|land|monitor180|land180|light180) ;;
+  *) echo "用法: $0 {monitor|land|light}[180]"
      echo "  monitor = 深色科技风 竖版 240x320"
      echo "  land    = 深色科技风 横版 320x240"
      echo "  light   = 浅色 Apple 风 竖版"
+     echo "  加 180 后缀 = 画面上下颠倒, 屏幕倒装时用 (monitor180 / land180 / light180)"
      exit 1 ;;
 esac
 

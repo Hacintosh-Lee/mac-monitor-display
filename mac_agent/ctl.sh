@@ -5,6 +5,7 @@
 #   ./ctl.sh log                 跟踪日志
 #   ./ctl.sh label "文字"        临时预览一个机型名(看完自动恢复)
 #   ./ctl.sh port                当前串口设备
+#   ./ctl.sh clock               预览时钟模式(停采集端, 按回车恢复)
 set -uo pipefail
 
 LABEL="com.macmonitor.agent"
@@ -53,5 +54,15 @@ case "${1:-status}" in
     read -r _
     ;;
 
-  *) echo "用法: $0 {status|start|stop|restart|log|port|label <文字>}"; exit 1 ;;
+  clock)
+    # 和 label 一样用 trap 兜底: 中途 Ctrl-C 或报错也一定把采集端拉回来,
+    # 免得像之前那样把屏幕晾在时钟模式上
+    trap 'echo; echo "恢复采集端..."; start; sleep 3; exec "$0" status' EXIT INT TERM
+    stop
+    echo "采集端已停。约 8 秒后屏幕会切到时钟模式。"
+    echo "看完按回车恢复仪表盘。"
+    read -r _
+    ;;
+
+  *) echo "用法: $0 {status|start|stop|restart|log|port|label <文字>|clock}"; exit 1 ;;
 esac

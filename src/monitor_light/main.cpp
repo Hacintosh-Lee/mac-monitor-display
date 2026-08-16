@@ -7,6 +7,12 @@
 #include "display.h"
 #include "stats.h"
 
+// 屏幕装反了就把这个覆盖掉, 由 platformio.ini 的 -DSCREEN_ROTATION 传入,
+// 不用为了换个方向复制一份源码。
+#ifndef SCREEN_ROTATION
+#define SCREEN_ROTATION 0  // 0=竖版正向, 2=上下颠倒(屏幕倒装时用)
+#endif
+
 static LGFX lcd;
 static LGFX_Sprite sRings(&lcd);  // 240x108 双环卡片
 static LGFX_Sprite sCores(&lcd);  // 240x34  核心
@@ -280,7 +286,7 @@ static void drawWaiting() {
 void setup() {
   Serial.begin(115200);
   lcd.init();
-  lcd.setRotation(0);
+  lcd.setRotation(SCREEN_ROTATION);
   lcd.fillScreen(C(C_BG));
 
   sRings.setColorDepth(16); sRings.createSprite(240, 108);
