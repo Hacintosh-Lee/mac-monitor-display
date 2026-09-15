@@ -356,7 +356,7 @@ C3 的 USB-Serial-JTAG 用 DTR/RTS 控制复位，设 `dtr=False; rts=False` 也
 -   Bilibili：<https://www.bilibili.com/video/BV12guC6oEnh/>
 -   Youtube：<https://youtu.be/KonNRCddym0?si=5lQHGgJpQoyFAxVg>
 
-如果这个项目对你有用，欢迎去 B 站关注一下。
+如果这个项目对你有用，欢迎去 B 站、Youtube 关注一下。
 
 ## License
 
