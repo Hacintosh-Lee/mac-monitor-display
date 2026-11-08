@@ -1,173 +1,192 @@
 // 大字时钟, 参考 iOS StandBy: 巨大渐变数字 + 角落日期。
 //
-// 数字不是用字体画的。位图字体放大 3 倍锯齿很明显, 而嵌入一套漂亮的大号字体
-// 在公开仓库有授权问题。这里把每个数字定义成"线段 + 圆弧"的路径, 沿路径盖圆点
-// 描边 —— 圆角笔帽和真曲线都有了, 任意尺寸都清晰。
+// 字形来自 EB Garamond Italic (SIL OFL), 由 tools/make_clockfont.py 转成
+// 8-bit 灰度蒙版编进固件。用灰度而不是 1-bit 位图字体, 是因为 Garamond 斜体
+// 有很细的发丝笔画, 1-bit 下会被切成断断续续的虚线。
 //
-// 渐变也顺带解决了: 每个圆点按自己所在的 y 取色, 一遍画完, 不需要额外的图层或精灵。
+// 刷新策略: 只重画发生变化的那一位数字。数字是等宽的(adv 相同), 所以每位占一个
+// 固定单元格; 换分钟时通常只有一两格变, 整屏重刷会看到明显闪烁, 也白白推了
+// 十几万像素。进入时钟模式的第一帧才做整屏清屏。
+//
+// 合成方式是逐行拼好再推该行的那一段: 只要一个行缓冲(480 字节), 不用整屏精灵
+// (那要 150KB, 和仪表盘的精灵抢不过来), 而且一行一次成像看不到中间态。
 #pragma once
 #include <Arduino.h>
-#include <math.h>
+#include "clockfont.h"
 
-// 路径段: LINE(x1,y1,x2,y2) 或 ARC(cx,cy,rx,ry,起始角,终止角), 坐标都是 0..1 归一化
-struct CSeg { uint8_t type; float a, b, c, d, e, f; };
-#define CL(x1, y1, x2, y2)        {0, x1, y1, x2, y2, 0, 0}
-#define CA(cx, cy, rx, ry, s, e)  {1, cx, cy, rx, ry, s, e}
+#define CLK_SLOTS 5                 // 最多 5 位 (HH:MM)
 
-// 每个数字最多 4 段
-static const CSeg CDIG[10][4] = {
-  // 角度: 0=右 90=下 180=左 270=上; a1<a0 为逆时针。
-  //
-  // 关键: 相邻段必须共享端点。之前 9 的圆和尾巴、3 的上下两碗都是各画各的,
-  // 端点差了一大截, 于是看起来是断开的两截 —— 加粗只能盖住一部分, 治标不治本。
-  // 下面每处衔接的坐标都是从上一段的终点反算出来的。
+static uint16_t clkRow[340];
 
-  // 0  单个椭圆
-  {CA(0.50f, 0.50f, 0.32f, 0.42f, 0, 360), CL(0,0,0,0), CL(0,0,0,0), CL(0,0,0,0)},
-  // 1  竖笔 + 左上小旗
-  {CL(0.54f, 0.07f, 0.54f, 0.93f), CL(0.54f, 0.09f, 0.25f, 0.28f), CL(0,0,0,0), CL(0,0,0,0)},
-  // 2  上碗(左->上->右, 终点 0.79/0.36) -> 斜线 -> 底横
-  {CA(0.50f, 0.30f, 0.30f, 0.22f, 180, 375), CL(0.79f, 0.36f, 0.14f, 0.90f),
-   CL(0.14f, 0.90f, 0.88f, 0.90f), CL(0,0,0,0)},
-  // 3  上碗终点(0.48,0.52) 与下碗起点(0.48,0.52) 重合
-  {CA(0.48f, 0.30f, 0.28f, 0.22f, 180, 450), CA(0.48f, 0.74f, 0.32f, 0.22f, 270, 540),
-   CL(0,0,0,0), CL(0,0,0,0)},
-  // 4  竖笔从顶点下来, 斜线与横线共用 (0.09,0.63)
-  {CL(0.68f, 0.08f, 0.09f, 0.63f), CL(0.09f, 0.63f, 0.92f, 0.63f),
-   CL(0.68f, 0.08f, 0.68f, 0.92f), CL(0,0,0,0)},
-  // 5  顶横 -> 左竖(终点 0.20/0.50) -> 碗从 215 度起, 正好接上
-  {CL(0.82f, 0.09f, 0.22f, 0.09f), CL(0.22f, 0.09f, 0.20f, 0.50f),
-   CA(0.48f, 0.66f, 0.30f, 0.27f, 215, 505), CL(0,0,0,0)},
-  // 6  上弯钩(起点 0.25/0.31) -> 左竖 -> 下圆(左端 0.19/0.70)
-  {CA(0.52f, 0.31f, 0.27f, 0.23f, 180, 345), CL(0.25f, 0.31f, 0.19f, 0.68f),
-   CA(0.50f, 0.70f, 0.31f, 0.23f, 0, 360), CL(0,0,0,0)},
-  // 7  顶横 + 长斜线, 共用 (0.89,0.09)
-  {CL(0.11f, 0.09f, 0.89f, 0.09f), CL(0.89f, 0.09f, 0.36f, 0.93f), CL(0,0,0,0), CL(0,0,0,0)},
-  // 8  上下两椭圆在 0.51 附近交叠
-  {CA(0.50f, 0.30f, 0.27f, 0.22f, 0, 360), CA(0.50f, 0.72f, 0.31f, 0.22f, 0, 360),
-   CL(0,0,0,0), CL(0,0,0,0)},
-  // 9  上圆右端(0.77,0.30) -> 竖笔 -> 下弯钩(起点 0.79/0.66)
-  {CA(0.48f, 0.30f, 0.29f, 0.23f, 0, 360), CL(0.77f, 0.30f, 0.79f, 0.66f),
-   CA(0.48f, 0.66f, 0.31f, 0.24f, 0, 125), CL(0,0,0,0)},
-};
-static const uint8_t CDIG_N[10] = {1, 2, 3, 2, 3, 3, 3, 2, 2, 3};
-
-// 竖向渐变取色
-static inline uint16_t clockGrad(LGFX_Device &lcd, uint32_t c0, uint32_t c1,
-                                 int y, int y0, int y1) {
-  float t = (y1 > y0) ? (float)(y - y0) / (y1 - y0) : 0.0f;
-  if (t < 0) t = 0;
-  if (t > 1) t = 1;
-  int r = ((c0 >> 16) & 0xFF) + (((int)((c1 >> 16) & 0xFF) - (int)((c0 >> 16) & 0xFF)) * t);
-  int g = ((c0 >> 8) & 0xFF) + (((int)((c1 >> 8) & 0xFF) - (int)((c0 >> 8) & 0xFF)) * t);
-  int b = (c0 & 0xFF) + (((int)(c1 & 0xFF) - (int)(c0 & 0xFF)) * t);
-  return lcd.color565(r, g, b);
+static inline uint16_t clkRGB(LGFX_Device &lcd, uint32_t c) {
+    return lcd.color565((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
 }
 
-// 沿路径盖圆点描边。步长按设备像素算, 保证不同尺寸下笔画都连续不断
-static void clockStroke(LGFX_Device &lcd, const CSeg &s, int x, int y, int w, int h,
-                        int th, uint32_t c0, uint32_t c1, int gy0, int gy1) {
-  int rad = th / 2;
-  if (s.type == 0) {
-    float x1 = x + s.a * w, y1 = y + s.b * h;
-    float x2 = x + s.c * w, y2 = y + s.d * h;
-    float len = sqrtf((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
-    int n = (int)(len / 1.5f) + 1;
-    for (int i = 0; i <= n; i++) {
-      float t = (float)i / n;
-      int px = (int)(x1 + (x2 - x1) * t), py = (int)(y1 + (y2 - y1) * t);
-      lcd.fillCircle(px, py, rad, clockGrad(lcd, c0, c1, py, gy0, gy1));
+static inline uint16_t clkBlend(LGFX_Device &lcd, uint32_t bg, uint32_t fg, uint8_t a) {
+    if (a == 0)   return clkRGB(lcd, bg);
+    if (a == 255) return clkRGB(lcd, fg);
+    int r = (((fg >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * (255 - a)) / 255;
+    int g = (((fg >> 8)  & 0xFF) * a + ((bg >> 8)  & 0xFF) * (255 - a)) / 255;
+    int b = ((fg & 0xFF) * a + (bg & 0xFF) * (255 - a)) / 255;
+    return lcd.color565(r, g, b);
+}
+
+static inline uint32_t clkGradRGB(uint32_t c0, uint32_t c1, int y, int y0, int y1) {
+    int span = y1 - y0;
+    int t = (span > 0) ? ((y - y0) * 255 / span) : 0;
+    if (t < 0) t = 0;
+    if (t > 255) t = 255;
+    int r = (((c0 >> 16) & 0xFF) * (255 - t) + ((c1 >> 16) & 0xFF) * t) / 255;
+    int g = (((c0 >> 8)  & 0xFF) * (255 - t) + ((c1 >> 8)  & 0xFF) * t) / 255;
+    int b = ((c0 & 0xFF) * (255 - t) + (c1 & 0xFF) * t) / 255;
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+}
+
+// 重画一个横向区间: 铺底色, 再把所有与之相交的字形按 alpha 混上去。
+//
+// 为什么要一次合成多个字形: 斜体的墨迹会超出标称步进宽度(adv), 向右倾斜的部分
+// 伸进下一格。所以重绘区域必须按墨迹算(而不是 adv), 而这个区域又可能盖住邻居
+// 伸过来的笔画 —— 只画自己就会把邻居擦掉一块。
+static void clkPaintSpan(LGFX_Device &lcd, int rx, int rw, int ry, int rh,
+                         const ClkGlyph* const* gs, const int* gx, const int* gy,
+                         int n, int gy0, int gy1,
+                         uint32_t bg, uint32_t c0, uint32_t c1) {
+    int W = lcd.width(), H = lcd.height();
+    if (rx < 0) { rw += rx; rx = 0; }
+    if (rx + rw > W) rw = W - rx;
+    if (rw <= 0) return;
+
+    uint16_t bgc = clkRGB(lcd, bg);
+    for (int y = ry; y < ry + rh; y++) {
+        if (y < 0 || y >= H) continue;
+        for (int i = 0; i < rw; i++) clkRow[i] = bgc;
+
+        uint32_t fg = clkGradRGB(c0, c1, y, gy0, gy1);
+        for (int k = 0; k < n; k++) {
+            const ClkGlyph* g = gs[k];
+            int row = y - gy[k];
+            if (row < 0 || row >= (int)g->h) continue;
+            const uint8_t* src = g->a + (size_t)row * g->w;
+            for (int i = 0; i < (int)g->w; i++) {
+                int x = gx[k] + i - rx;
+                if (x < 0 || x >= rw) continue;
+                uint8_t aa = src[i];
+                if (aa) clkRow[x] = clkBlend(lcd, bg, fg, aa);
+            }
+        }
+        // 必须显式指定颜色类型: pushImage 收到裸 uint16_t* 时按字节交换序解释,
+        // 而 color565() 返回主机序。不指定的话颜色和底色都会错。
+        lcd.pushImage(rx, y, rw, 1, (const lgfx::rgb565_t*)clkRow);
     }
-  } else {
-    float cx = x + s.a * w, cy = y + s.b * h;
-    float rx = s.c * w, ry = s.d * h;
-    float a0 = s.e * DEG_TO_RAD, a1 = s.f * DEG_TO_RAD;
-    float arclen = fabsf(a1 - a0) * (rx + ry) * 0.5f;
-    int n = (int)(arclen / 1.5f) + 1;
-    for (int i = 0; i <= n; i++) {
-      float a = a0 + (a1 - a0) * i / n;
-      int px = (int)(cx + cosf(a) * rx), py = (int)(cy + sinf(a) * ry);
-      lcd.fillCircle(px, py, rad, clockGrad(lcd, c0, c1, py, gy0, gy1));
-    }
-  }
-}
-
-static void clockDigit(LGFX_Device &lcd, int d, int x, int y, int w, int h, int th,
-                       uint32_t c0, uint32_t c1, int gy0, int gy1) {
-  if (d < 0 || d > 9) return;
-  for (int i = 0; i < CDIG_N[d]; i++)
-    clockStroke(lcd, CDIG[d][i], x, y, w, h, th, c0, c1, gy0, gy1);
-}
-
-static void clockColon(LGFX_Device &lcd, int cx, int y, int h, int th,
-                       uint32_t c0, uint32_t c1, int gy0, int gy1) {
-  int r = th / 2;
-  int y1 = y + h * 0.34f, y2 = y + h * 0.70f;
-  lcd.fillCircle(cx, y1, r, clockGrad(lcd, c0, c1, y1, gy0, gy1));
-  lcd.fillCircle(cx, y2, r, clockGrad(lcd, c0, c1, y2, gy0, gy1));
 }
 
 static const char *CWDAY[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
 
-// 主入口。自适应横竖屏: 横屏 HH:MM 排一行, 竖屏 HH 上 MM 下 —— 竖屏挤一行的话
-// 每个数字只能有 55px 宽, 完全撑不起这种大字效果。
+// full=true 时整屏重画(刚从仪表盘切过来); 否则只重画变化的那几位
 static void drawClockFace(LGFX_Device &lcd, const struct tm &tm_now,
                           uint32_t bg, uint32_t c0, uint32_t c1, uint32_t dim,
-                          bool netOk) {
-  int W = lcd.width(), H = lcd.height();
-  lcd.fillScreen(lcd.color565((bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF));
+                          bool netOk, bool full) {
+    int W = lcd.width(), H = lcd.height();
+    bool landscape = W > H;
 
-  int hh = tm_now.tm_hour, mm = tm_now.tm_min;
-  bool landscape = W > H;
+    // ---- 排版 ----
+    const ClkGlyph* seq[CLK_SLOTS];
+    int sx[CLK_SLOTS], sy[CLK_SLOTS], sw[CLK_SLOTS];
+    int n = 0, cellH, gy0, gy1, dateY;
+    int hh = tm_now.tm_hour, mm = tm_now.tm_min;
+    char code[CLK_SLOTS];
 
-  if (landscape) {
-    int dateH = 0;                       // 横屏日期在右上角, 不占底部
-    int dh = H * 0.58f, dw = dh * 0.60f, th = dh * 0.155f;
-    int gap = dw * 0.16f, cw = th;
-    int total = dw * 4 + gap * 4 + cw;
-    int x = (W - total) / 2, y = (H - dh) / 2 + 6 + dateH;
-    int gy0 = y, gy1 = y + dh;
-    clockDigit(lcd, hh / 10, x, y, dw, dh, th, c0, c1, gy0, gy1); x += dw + gap;
-    clockDigit(lcd, hh % 10, x, y, dw, dh, th, c0, c1, gy0, gy1); x += dw + gap;
-    clockColon(lcd, x + cw / 2, y, dh, th, c0, c1, gy0, gy1);     x += cw + gap;
-    clockDigit(lcd, mm / 10, x, y, dw, dh, th, c0, c1, gy0, gy1); x += dw + gap;
-    clockDigit(lcd, mm % 10, x, y, dw, dh, th, c0, c1, gy0, gy1);
-  } else {
-    // 竖屏先扣掉日期要占的高度, 再决定数字多大 —— 之前是反过来先定数字尺寸,
-    // 结果笔画的圆角半径超出标称box, 正好压在日期上
-    const int dateH = 40;
-    int avail = H - dateH;
-    int dh = avail * 0.38f, dw = dh * 0.62f, th = dh * 0.155f;
-    int gapY = avail * 0.05f, gapX = dw * 0.18f;
-    int rowW = dw * 2 + gapX;
-    int x0 = (W - rowW) / 2;
-    int y1 = (avail - (dh * 2 + gapY)) / 2;
-    int y2 = y1 + dh + gapY;
-    int gy0 = y1, gy1 = y2 + dh;
-    clockDigit(lcd, hh / 10, x0, y1, dw, dh, th, c0, c1, gy0, gy1);
-    clockDigit(lcd, hh % 10, x0 + dw + gapX, y1, dw, dh, th, c0, c1, gy0, gy1);
-    clockDigit(lcd, mm / 10, x0, y2, dw, dh, th, c0, c1, gy0, gy1);
-    clockDigit(lcd, mm % 10, x0 + dw + gapX, y2, dw, dh, th, c0, c1, gy0, gy1);
-  }
+    if (landscape) {
+        const ClkGlyph* q[5] = {&CLKSMALL[hh / 10], &CLKSMALL[hh % 10], &CLKSMALL[10],
+                                &CLKSMALL[mm / 10], &CLKSMALL[mm % 10]};
+        const char cc[5] = {(char)('0' + hh / 10), (char)('0' + hh % 10), ':',
+                            (char)('0' + mm / 10), (char)('0' + mm % 10)};
+        int total = 0;
+        for (int i = 0; i < 5; i++) total += q[i]->adv;
+        int x = (W - total) / 2, y = (H - CLKSMALL_H) / 2 + 6;
+        cellH = CLKSMALL_H; gy0 = y; gy1 = y + CLKSMALL_H;
+        for (int i = 0; i < 5; i++) {
+            seq[n] = q[i]; sx[n] = x; sy[n] = y; sw[n] = q[i]->adv; code[n] = cc[i];
+            x += q[i]->adv; n++;
+        }
+        dateY = 16;
+    } else {
+        const int dateH = 34;
+        int gap = CLKBIG_H / 14;
+        int blockH = CLKBIG_H * 2 + gap;
+        int y = (H - dateH - blockH) / 2;
+        cellH = CLKBIG_H; gy0 = y; gy1 = y + blockH;
+        int d[4] = {hh / 10, hh % 10, mm / 10, mm % 10};
+        for (int r = 0; r < 2; r++) {
+            const ClkGlyph* a = &CLKBIG[d[r * 2]];
+            const ClkGlyph* b = &CLKBIG[d[r * 2 + 1]];
+            int x = (W - (a->adv + b->adv)) / 2;
+            seq[n] = a; sx[n] = x; sy[n] = y; sw[n] = a->adv; code[n] = (char)('0' + d[r*2]); n++;
+            x += a->adv;
+            seq[n] = b; sx[n] = x; sy[n] = y; sw[n] = b->adv; code[n] = (char)('0' + d[r*2+1]); n++;
+            y += CLKBIG_H + gap;
+        }
+        dateY = H - 12;
+    }
 
-  // 日期。横屏放右上角(和参考图一致), 竖屏放底部居中
-  char date[24];
-  snprintf(date, sizeof(date), "%s %d", CWDAY[tm_now.tm_wday % 7], tm_now.tm_mday);
-  lcd.setFont(&fonts::FreeSansBold12pt7b);
-  lcd.setTextColor(TFT_WHITE);   // 日期用纯白, 和渐变大字拉开层次
-  if (landscape) {
-    lcd.setTextDatum(top_right);
-    lcd.drawString(date, W - 14, 16);
-  } else {
-    lcd.setTextDatum(bottom_center);
-    lcd.drawString(date, W / 2, H - 12);
-  }
+    // ---- 只重画变化的位 ----
+    static char lastCode[CLK_SLOTS] = {0, 0, 0, 0, 0};
+    static int lastMday = -1;
 
-  // 时间源提示: 没有主机也没有网络时, 时间可能是不准的, 得让人看得出来
-  if (!netOk) {
-    lcd.setFont(&fonts::Font2);
-    lcd.setTextColor(lcd.color565((dim >> 16) & 0xFF, (dim >> 8) & 0xFF, dim & 0xFF));
-    lcd.setTextDatum(bottom_center);
-    lcd.drawString("no time source", W / 2, H - 6);
-  }
+    if (full) {
+        lcd.fillScreen(clkRGB(lcd, bg));
+        for (int i = 0; i < CLK_SLOTS; i++) lastCode[i] = 0;
+        lastMday = -1;
+    }
+
+    int inkX0 = landscape ? CLKSMALL_X0 : CLKBIG_X0;
+    int inkX1 = landscape ? CLKSMALL_X1 : CLKBIG_X1;
+
+    // 按行处理: 竖版两行各两位, 横版一行五位
+    int rowCount = landscape ? 1 : 2;
+    int perRow   = landscape ? 5 : 2;
+    for (int r = 0; r < rowCount; r++) {
+        int lo = r * perRow, hi = lo + perRow;
+        int dx0 = 32767, dx1 = -32768;
+        for (int i = lo; i < hi && i < n; i++) {
+            if (code[i] == lastCode[i]) continue;
+            if (sx[i] + inkX0 < dx0) dx0 = sx[i] + inkX0;
+            if (sx[i] + inkX1 > dx1) dx1 = sx[i] + inkX1;
+        }
+        if (dx1 <= dx0) continue;            // 这一行没有变化
+
+        // 把本行所有与脏区相交的字形都收进来一起合成
+        const ClkGlyph* gs[CLK_SLOTS];
+        int gx[CLK_SLOTS], gy[CLK_SLOTS], m = 0;
+        for (int i = lo; i < hi && i < n; i++) {
+            int ix0 = sx[i] + seq[i]->dx, ix1 = ix0 + seq[i]->w;
+            if (ix1 <= dx0 || ix0 >= dx1) continue;
+            gs[m] = seq[i]; gx[m] = ix0; gy[m] = sy[i] + seq[i]->dy; m++;
+        }
+        clkPaintSpan(lcd, dx0, dx1 - dx0, sy[lo], cellH, gs, gx, gy, m,
+                     gy0, gy1, bg, c0, c1);
+        for (int i = lo; i < hi && i < n; i++) lastCode[i] = code[i];
+    }
+
+    // ---- 日期每天才变一次 ----
+    if (full || tm_now.tm_mday != lastMday) {
+        lastMday = tm_now.tm_mday;
+        char date[24];
+        snprintf(date, sizeof(date), "%s %d", CWDAY[tm_now.tm_wday % 7], tm_now.tm_mday);
+        lcd.setFont(&fonts::FreeSansBold12pt7b);
+        lcd.setTextColor(TFT_WHITE, clkRGB(lcd, bg));   // 带背景色, 自己擦掉上一次
+        if (landscape) {
+            lcd.setTextDatum(top_right);
+            lcd.drawString(date, W - 14, dateY);
+        } else {
+            lcd.setTextDatum(bottom_center);
+            lcd.drawString(date, W / 2, dateY);
+        }
+        if (!netOk) {
+            lcd.setFont(&fonts::Font2);
+            lcd.setTextColor(clkRGB(lcd, dim), clkRGB(lcd, bg));
+            lcd.setTextDatum(bottom_center);
+            lcd.drawString(" no time source ", W / 2, H - 2);
+        }
+    }
 }

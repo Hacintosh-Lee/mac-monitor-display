@@ -10,15 +10,25 @@ LOG="$HOME/Library/Logs/MacMonitor.log"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$SRC_DIR/mac_monitor.py"
 # mac_monitor.py 依赖 temps.py, 两个都得装过去
-MODULES=(mac_monitor.py temps.py)
+MODULES=(mac_monitor.py temps.py run.sh)
 
-echo "==> 检查 python3"
-if ! /usr/bin/python3 -c 'import venv' >/dev/null 2>&1; then
-  echo "错误: 系统 python3 不可用。" >&2
-  echo "全新的 Mac 上 /usr/bin/python3 只是个占位符, 需要先装命令行工具:" >&2
+echo "==> 挑选解释器"
+# 优先不依赖 Xcode 的。/usr/bin/python3 只是转发器, 装了 Xcode 会被解析进 Xcode.app,
+# 那条路径会随 Xcode 升级/卸载而断掉, 所以排最后。
+BASE_PY=""
+for p in /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+         /Library/Developer/CommandLineTools/usr/bin/python3 /usr/bin/python3; do
+  if [ -x "$p" ] && "$p" -c 'import venv' >/dev/null 2>&1; then BASE_PY="$p"; break; fi
+done
+if [ -z "$BASE_PY" ]; then
+  echo "错误: 找不到可用的 python3。先装命令行工具:" >&2
   echo "    xcode-select --install" >&2
   exit 1
 fi
+echo "    使用 $BASE_PY"
+case "$BASE_PY" in
+  *Xcode.app*) echo "    提示: 这个解释器在 Xcode 里, Xcode 变动时启动器会自动重建 venv" ;;
+esac
 
 echo "==> 停掉可能已在运行的旧实例"
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
@@ -26,11 +36,12 @@ launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/
 echo "==> 安装到 $APP_DIR"
 mkdir -p "$APP_DIR" "$HOME/Library/LaunchAgents" "$(dirname "$LOG")"
 for m in "${MODULES[@]}"; do cp "$SRC_DIR/$m" "$APP_DIR/$m"; done
+chmod +x "$APP_DIR/run.sh"
 
 echo "==> 建 venv 并装依赖 (pyserial, psutil)"
-if [ ! -x "$APP_DIR/venv/bin/python3" ]; then
-  /usr/bin/python3 -m venv "$APP_DIR/venv"
-fi
+# 旧 venv 可能指向已经不可靠的解释器, 直接重建, 反正很快
+rm -rf "$APP_DIR/venv"
+"$BASE_PY" -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/python3" -m pip install --quiet --upgrade pip
 "$APP_DIR/venv/bin/python3" -m pip install --quiet pyserial psutil
 
@@ -44,8 +55,8 @@ cat > "$PLIST" <<PLIST_EOF
     <string>$LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$APP_DIR/venv/bin/python3</string>
-        <string>$APP_DIR/mac_monitor.py</string>
+        <string>/bin/bash</string>
+        <string>$APP_DIR/run.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

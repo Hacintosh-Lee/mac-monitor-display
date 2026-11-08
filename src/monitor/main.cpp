@@ -386,21 +386,19 @@ void setup() {
 
 void loop() {
   pollSerial();
+  usbWatchdog();
   tkLoop();
 
   bool hostLive = haveData && (millis() - lastRx < CLOCK_AFTER_MS);
 
   // ---- 时钟模式 ----
   static bool inClock = false;
-  static int lastMin = -1;
   if (!hostLive && tkHasTime()) {
-    if (!inClock) { inClock = true; lastMin = -1; }
+    // drawClockFace 内部只重画变化的那几位, 所以可以每轮都调
     struct tm t = tkLocalTime();
-    if (t.tm_min != lastMin) {          // 一分钟才重画一次, 没必要空转
-      lastMin = t.tm_min;
-      drawClockFace(lcd, t, C_BG, C_CPU, C_GPU, C_DIM, tkHasTime());
-    }
-    delay(120);
+    drawClockFace(lcd, t, C_BG, C_CPU, C_GPU, C_DIM, tkHasTime(), !inClock);
+    inClock = true;
+    delay(200);
     return;
   }
 

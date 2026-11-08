@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include "display.h"
 #include "stats.h"
+#include "clockface.h"
 
 // 屏幕装反了就把这个覆盖掉, 由 platformio.ini 的 -DSCREEN_ROTATION 传入,
 // 不用为了换个方向复制一份源码。
@@ -296,11 +297,29 @@ void setup() {
   sFoot.setColorDepth(16);  sFoot.createSprite(240, 20);
   Serial.printf("light theme up, free heap=%u\n", (unsigned)ESP.getFreeHeap());
 
+  tkBegin("MacMonitor-Setup");
   drawWaiting();
 }
 
+#define CLOCK_AFTER_MS 8000
+
 void loop() {
   pollSerial();
+  usbWatchdog();
+
+  // 主机离线一段时间就切时钟; 主机一回来立刻切回仪表盘
+  static bool inClock = false;
+  if (!(haveData && (millis() - lastRx < CLOCK_AFTER_MS)) && tkHasTime()) {
+    struct tm t = tkLocalTime();
+    drawClockFace(lcd, t, C_BG, C_BLUE, C_PURPLE, C_LABEL2, tkHasTime(), !inClock);
+    inClock = true;
+    delay(200);
+    return;
+  }
+  if (inClock) {            // 从时钟切回来要整屏清一次, 否则大字残迹会留着
+    inClock = false;
+    lcd.fillScreen(C(C_BG));
+  }
 
   static bool wasWaiting = true;
   if (!haveData) {

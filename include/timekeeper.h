@@ -27,6 +27,13 @@
 #include <Preferences.h>
 #endif
 
+// RTC 内存在软重启(ESP.restart)后仍然保留, 用它把时间带过重启 ——
+// 这样看门狗自救时时钟不会归零, 屏幕最多黑一下就回来。
+#define TK_RTC_MAGIC 0x4D4B4331
+RTC_DATA_ATTR static uint32_t g_rtcMagic;
+RTC_DATA_ATTR static int64_t  g_rtcEpoch;
+RTC_DATA_ATTR static int32_t  g_rtcTz;
+
 static time_t   g_tkBase   = 0;      // 最后一次同步到的 epoch(UTC)
 static uint32_t g_tkBaseMs = 0;      // 同步时的 millis()
 static long     g_tkTz     = 0;      // 本地时区偏移(秒)
@@ -118,7 +125,24 @@ static void tkStartPortal(const char *apName) {
 }
 #endif
 
+// 重启前把当前时间寄存到 RTC 内存
+static void tkSaveForRestart() {
+  if (!g_tkHas) return;
+  g_rtcEpoch = (int64_t)tkEpoch();
+  g_rtcTz = (int32_t)g_tkTz;
+  g_rtcMagic = TK_RTC_MAGIC;
+}
+
 static void tkBegin(const char *apName) {
+  // 先看看是不是刚被看门狗重启过, 是的话把时间接回来
+  if (g_rtcMagic == TK_RTC_MAGIC && g_rtcEpoch > 1700000000LL) {
+    g_tkBase = (time_t)g_rtcEpoch;
+    g_tkBaseMs = millis();
+    g_tkTz = g_rtcTz;
+    g_tkHas = true;
+    g_rtcMagic = 0;              // 只用一次, 避免下次冷启动拿到陈旧时间
+    Serial.println("[tk] 已从 RTC 内存恢复时间");
+  }
 #if TK_ENABLE_WIFI
   g_tkPrefs.begin("macmon", true);
   String ssid = g_tkPrefs.getString("ssid", "");

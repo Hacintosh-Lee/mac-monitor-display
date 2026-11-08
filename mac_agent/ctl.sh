@@ -28,7 +28,7 @@ case "${1:-status}" in
   port)    find_port || echo "(设备不在)" ;;
 
   status)
-    line=$(launchctl list | grep -i macmonitor)
+    line=$(launchctl list | grep -F "$LABEL")
     if [ -n "$line" ]; then
       echo "服务:   运行中  (PID/退出码/标签: $line)"
     else

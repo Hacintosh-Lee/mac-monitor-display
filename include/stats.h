@@ -178,3 +178,61 @@ static void fmtRate(float kbs, char *out, size_t n) {
   else if (kbs >= 10.0f) snprintf(out, n, "%.0f KB/s", kbs);
   else snprintf(out, n, "%.1f KB/s", kbs);
 }
+
+
+// ---------------------------------------------------------------------------
+// USB 看门狗 —— 替代"拔插线"
+//
+// 故障现象: 开机后采集端连上串口, 但一个字节也送不进来, 每 39 秒超时重连一次,
+// 循环几百轮都好不了, 唯一有效的恢复手段是拔插 USB 线(= 给芯片断电)。
+// 主机侧的"重开串口"不会复位芯片, 所以重连多少次对面都还是那个卡死的外设。
+//
+// 难点: 设备分不清"USB 卡死"和"用户主动切到时钟模式"。
+// Serial 的真假只取决于有没有收到 USB 的 SOF 帧, 也就是"线插在一台通电主机上",
+// 跟主机有没有打开串口无关 —— 两种情况下设备看到的都是「插着、没数据」。
+//
+// 所以不去区分, 而是让重启本身变得无害且有上限:
+//   1. 时间存在 RTC 内存里, 重启不丢, 屏幕最多黑一下就回到时钟
+//   2. 阈值拉到 10 分钟, 正常待机不会频繁打扰
+//   3. 最多连续自救 3 次。真是卡死的话一两次就好了; 如果是用户故意停了采集端,
+//      试满 3 次就彻底安静下来当时钟, 不再反复重启
+#define WDT_IDLE_MS      600000UL   // 插着主机但多久没数据就自救
+#define WDT_MAX_RESTARTS 3
+
+RTC_DATA_ATTR static uint8_t g_wdtCount;   // 连续自救次数, 软重启后保留
+
+static void usbWatchdog() {
+  static uint32_t lastActivity = 0;
+  static uint32_t seenRx = 0;
+  static bool init = false;
+  uint32_t now = millis();
+
+  if (!init) { init = true; lastActivity = now; }
+
+  // 收到新数据: 清掉计时和自救计数
+  if (lastRx != seenRx) {
+    seenRx = lastRx;
+    lastActivity = lastRx;
+    g_wdtCount = 0;
+  }
+
+  // 没插在通电主机上(Mac 关机/睡眠/插充电头): 正常待机, 不计时不重启
+  if (!(bool)Serial) {
+    lastActivity = now;
+    return;
+  }
+
+  if (now - lastActivity <= WDT_IDLE_MS) return;
+
+  if (g_wdtCount >= WDT_MAX_RESTARTS) {
+    lastActivity = now;        // 放弃自救, 安静当时钟
+    return;
+  }
+  g_wdtCount++;
+  Serial.printf("[wdt] 插着主机但 %lu 分钟无数据, 第 %u 次重启自救\n",
+                WDT_IDLE_MS / 60000UL, g_wdtCount);
+  Serial.flush();
+  tkSaveForRestart();          // 把时间带过重启
+  delay(80);
+  ESP.restart();
+}
