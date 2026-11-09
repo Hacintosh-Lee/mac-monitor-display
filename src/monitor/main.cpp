@@ -364,6 +364,9 @@ static void drawWaiting() {
 
 void setup() {
   Serial.begin(115200);
+  // 发送永不阻塞。采集端只写不读, 设备这边的发送缓冲迟早填满, 届时 Serial.print
+  // 会卡住主循环 -> 不再读串口 -> 主机写入也跟着超时, 死锁。超时设 0 就直接丢弃。
+  Serial.setTxTimeoutMs(0);
   lcd.init();
   lcd.setRotation(SCREEN_ROTATION);
   lcd.setBrightness(200);

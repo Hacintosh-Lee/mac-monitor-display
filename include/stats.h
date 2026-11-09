@@ -206,33 +206,34 @@ static void usbWatchdog() {
   static uint32_t seenRx = 0;
   static bool init = false;
   uint32_t now = millis();
-
   if (!init) { init = true; lastActivity = now; }
 
-  // 收到新数据: 清掉计时和自救计数
-  if (lastRx != seenRx) {
+  if (lastRx != seenRx) {          // 收到新数据: 清计时和自救计数
     seenRx = lastRx;
     lastActivity = lastRx;
     g_wdtCount = 0;
   }
 
-  // 没插在通电主机上(Mac 关机/睡眠/插充电头): 正常待机, 不计时不重启
-  if (!(bool)Serial) {
-    lastActivity = now;
-    return;
-  }
+  // 这里曾经有一道 `if (!Serial) return;` 的闸门, 本意是"没插在主机上就别重启",
+  // 结果恰恰在真正需要时把看门狗关掉了:
+  // Serial 的真假依赖 SOF 中断, 而 USB-Serial-JTAG 外设一旦底层卡死, SOF 也停了,
+  // Serial 变假 -> 每轮都把计时器清零 -> 看门狗永远走不到阈值。
+  // 实测卡死时连 esptool 都握不上手(DTR/RTS 复位都送不进芯片), 主机侧毫无办法,
+  // 只能靠设备自己重启。所以不再看 Serial, 无条件计时。
+  //
+  // 误伤待机的代价已经很低: 时间存在 RTC 内存里重启不丢(屏幕只黑一下),
+  // 而且最多连续自救 3 次就彻底安静。
 
   if (now - lastActivity <= WDT_IDLE_MS) return;
 
   if (g_wdtCount >= WDT_MAX_RESTARTS) {
-    lastActivity = now;        // 放弃自救, 安静当时钟
+    lastActivity = now;            // 放弃自救, 安静当时钟
     return;
   }
   g_wdtCount++;
-  Serial.printf("[wdt] 插着主机但 %lu 分钟无数据, 第 %u 次重启自救\n",
-                WDT_IDLE_MS / 60000UL, g_wdtCount);
-  Serial.flush();
-  tkSaveForRestart();          // 把时间带过重启
-  delay(80);
+  tkSaveForRestart();              // 把时间带过重启
+  // 注意: 这里不要 Serial.printf/flush。主机(采集端)不读串口, 设备的发送缓冲
+  // 迟早填满, 届时写入会阻塞 —— 在自救路径上卡住就彻底没救了。
+  delay(50);
   ESP.restart();
 }

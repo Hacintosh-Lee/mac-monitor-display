@@ -251,6 +251,11 @@ def main():
                 ser.write(time_line())
                 next_info = time.monotonic() + INFO_EVERY
 
+            # 把设备发来的东西读掉。只写不读的话, 设备侧的发送缓冲会一直涨,
+            # 填满之后它那边的 Serial.print 就会阻塞, 连累主循环不再读串口。
+            if ser.in_waiting:
+                ser.read(ser.in_waiting)
+
             ser.write(sampler.sample().encode("ascii", "replace"))
             wtimeouts = 0
             time.sleep(INTERVAL)
